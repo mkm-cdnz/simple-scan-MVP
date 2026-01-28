@@ -1,0 +1,1237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Warehouse Scanner MVP (Webcam → Clipboard)</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:#111a33;
+      --text:#e9ecff;
+      --muted:#a9b2da;
+      --good:#2bd576;
+      --warn:#ffcc66;
+      --bad:#ff5c5c;
+      --cool:#ff9c2a;
+      --ready:#7aa3ff;
+      --stroke: rgba(255,255,255,.12);
+      --shadow: 0 20px 60px rgba(0,0,0,.35);
+      --radius: 18px;
+
+      --ringColor: var(--ready);
+      --ringProgress: 1;
+    }
+
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background:
+        radial-gradient(1200px 700px at 20% 10%, rgba(95,120,255,.25), transparent 55%),
+        radial-gradient(1000px 650px at 80% 30%, rgba(43,213,118,.18), transparent 60%),
+        var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:22px;
+    }
+
+    .wrap{ width:min(1180px, 100%); display:grid; grid-template-columns: 1.25fr .75fr; gap:16px; }
+    @media (max-width: 980px){ .wrap{ grid-template-columns:1fr; } }
+
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid var(--stroke);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+
+    .header{ padding:16px 18px; border-bottom:1px solid var(--stroke); display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .title{ display:flex; flex-direction:column; gap:4px; }
+    .title h1{ font-size:18px; margin:0; letter-spacing:.2px; }
+    .title p{ margin:0; color:var(--muted); font-size:13px; line-height:1.35; }
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 10px;
+      border-radius:999px;
+      border:1px solid var(--stroke);
+      background: rgba(0,0,0,.2);
+      color: var(--muted);
+      font-size:12px;
+      white-space:nowrap;
+      user-select:none;
+    }
+    .dot{ width:9px; height:9px; border-radius:50%; background: rgba(255,255,255,.35); }
+    .pill.good .dot{ background: var(--good); }
+    .pill.warn .dot{ background: var(--warn); }
+    .pill.bad .dot{ background: var(--bad); }
+
+    .main{ padding:16px; }
+
+    .videoWrap{
+      position:relative;
+      aspect-ratio: 16/9;
+      background: rgba(0,0,0,.35);
+      border-radius: 16px;
+      border:1px solid var(--stroke);
+      overflow:hidden;
+    }
+
+    video, canvas{
+      width:100%;
+      height:100%;
+      object-fit: cover;
+      display:block;
+    }
+
+    #freezeCanvas{
+      position:absolute;
+      inset:0;
+      display:none;
+    }
+
+    .scanArea{
+      position:absolute;
+      inset: 10%;
+      border-radius: 16px;
+      pointer-events:none;
+    }
+
+    .frame{
+      position:absolute;
+      inset: 0;
+      border:2px dashed rgba(255,255,255,.35);
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 9999px rgba(0,0,0,.18);
+    }
+
+    .ring{
+      position:absolute;
+      inset: -10px;
+      pointer-events:none;
+      filter: drop-shadow(0 10px 18px rgba(0,0,0,.35));
+      opacity: .95;
+    }
+
+    .ring circle{
+      fill: none;
+      stroke: var(--ringColor);
+      stroke-width: 4.5;
+      stroke-linecap: round;
+      transform-origin: 50px 50px;
+      transform: rotate(-90deg);
+      stroke-dasharray: 283;
+      stroke-dashoffset: calc(283 * (1 - var(--ringProgress)));
+      transition: stroke .15s ease, opacity .15s ease;
+    }
+
+    .scanStateLabel{
+      position:absolute;
+      top: 10px;
+      left: 10px;
+      padding: 8px 10px;
+      border-radius: 14px;
+      background: rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.12);
+      backdrop-filter: blur(6px);
+      font-size: 12px;
+      color: rgba(233,236,255,.92);
+    }
+
+    .hint{
+      position:absolute;
+      left:12px;
+      bottom:12px;
+      right:12px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:space-between;
+      padding:10px 12px;
+      border-radius: 14px;
+      background: rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.12);
+      backdrop-filter: blur(6px);
+      color: rgba(233,236,255,.9);
+      font-size: 12.5px;
+    }
+
+    .hint kbd{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      border:1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+      color: rgba(233,236,255,.95);
+    }
+
+    .controls{ margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    @media (max-width: 540px){ .controls{ grid-template-columns: 1fr; } }
+
+    .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    label{ color: var(--muted); font-size:12px; }
+
+    select, input[type="text"]{
+      width:100%;
+      padding:10px 12px;
+      border-radius: 12px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.25);
+      color: var(--text);
+      outline:none;
+    }
+
+    .btn{
+      padding:10px 12px;
+      border-radius: 12px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      cursor:pointer;
+      font-weight: 600;
+      letter-spacing: .2px;
+    }
+    .btn:hover{ background: rgba(255,255,255,.12); }
+    .btn.primary{ background: rgba(43,213,118,.18); border-color: rgba(43,213,118,.3); }
+    .btn.primary:hover{ background: rgba(43,213,118,.25); }
+    .btn.danger{ background: rgba(255,92,92,.14); border-color: rgba(255,92,92,.25); }
+    .btn.danger:hover{ background: rgba(255,92,92,.20); }
+    .btn:disabled{ opacity:.5; cursor:not-allowed; }
+
+    .side{ padding:16px; display:flex; flex-direction:column; gap:14px; }
+    .box{ background: rgba(0,0,0,.22); border:1px solid rgba(255,255,255,.12); border-radius: 16px; padding:12px; }
+    .box h2{ margin:0 0 8px; font-size:13px; color: rgba(233,236,255,.92); letter-spacing:.2px; }
+
+    .bigCode{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: .4px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.12);
+      word-break: break-word;
+      user-select: text;
+      min-height: 54px;
+      display:flex;
+      align-items:center;
+    }
+
+    .meta{ margin-top:8px; color: var(--muted); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; }
+
+    .log{ display:flex; flex-direction:column; gap:8px; max-height: 280px; overflow:auto; padding-right: 4px; }
+
+    .logItem{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:10px;
+      padding:10px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.05);
+      border:1px solid rgba(255,255,255,.10);
+    }
+
+    .logItem .left{ display:flex; flex-direction:column; gap:4px; }
+    .logItem .topLine{ display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; }
+
+    .tag{
+      display:inline-flex;
+      align-items:center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.22);
+      color: rgba(233,236,255,.92);
+      font-size: 11px;
+      user-select:none;
+    }
+
+    .logItem code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; color: rgba(233,236,255,.92); }
+    .logItem .t{ color: var(--muted); font-size: 11px; }
+
+    .miniBtn{
+      padding:7px 10px;
+      border-radius: 12px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.25);
+      color: var(--text);
+      cursor:pointer;
+      font-weight:600;
+      white-space:nowrap;
+    }
+    .miniBtn:hover{ background: rgba(0,0,0,.35); }
+
+    .footerNote{ color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .inlineToggle{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      cursor:pointer;
+      user-select:none;
+    }
+
+    /* Modal */
+    .modalBackdrop{
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding: 18px;
+      z-index: 50;
+    }
+
+    .modal{
+      width: min(820px, 100%);
+      background: linear-gradient(180deg, rgba(22,30,60,.96), rgba(12,16,35,.96));
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 18px;
+      box-shadow: 0 30px 90px rgba(0,0,0,.55);
+      overflow:hidden;
+    }
+
+    .modalHeader{ padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.12); display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .modalHeader h3{ margin:0; font-size: 15px; letter-spacing:.2px; }
+    .modalHeader p{ margin:4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+    .modalBody{ padding: 14px 16px; display:flex; flex-direction:column; gap: 10px; }
+
+    .choice{
+      display:flex;
+      gap: 12px;
+      align-items:flex-start;
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.18);
+    }
+
+    .choice:hover{ background: rgba(0,0,0,.26); }
+
+    .choiceMain{ flex:1; display:flex; flex-direction:column; gap:6px; }
+    .choiceTop{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .choiceValue{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 14px; color: rgba(233,236,255,.95); }
+    .choiceRaw{ color: var(--muted); font-size: 11px; word-break: break-word; }
+
+    .modalFooter{ padding: 14px 16px; border-top: 1px solid rgba(255,255,255,.12); display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; }
+
+    .modalFooterLeft{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+
+    .modalFooterRight{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    .show{ display:flex; }
+
+    .kbdHint{ color: var(--muted); font-size: 12px; }
+    .kbdHint kbd{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 11px; padding: 2px 6px; border-radius: 8px; border:1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: rgba(233,236,255,.95); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card">
+      <div class="header">
+        <div class="title">
+          <h1>Warehouse Scanner MVP</h1>
+          <p>Scans 1D + 2D barcodes via webcam. If multiple codes are detected, you pick which one to copy.</p>
+        </div>
+        <div id="statusPill" class="pill warn" title="Scanner status">
+          <span class="dot"></span>
+          <span id="statusText">Not running</span>
+        </div>
+      </div>
+
+      <div class="main">
+        <div class="videoWrap" id="videoWrap">
+          <video id="video" playsinline muted></video>
+          <canvas id="freezeCanvas"></canvas>
+
+          <div class="scanArea" id="scanArea" aria-hidden="true">
+            <svg class="ring" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <circle cx="50" cy="50" r="45"></circle>
+            </svg>
+            <div class="frame"></div>
+            <div class="scanStateLabel" id="scanStateLabel">Ready</div>
+          </div>
+
+          <div class="hint">
+            <div>
+              Hold the label inside the box. If multiple barcodes show up, you’ll choose which one to copy.
+              Paste with <kbd>Ctrl</kbd> + <kbd>V</kbd>.
+            </div>
+            <div id="engineText" style="opacity:.9;"></div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <div class="box">
+            <h2>Camera</h2>
+            <div class="row">
+              <label for="cameraSelect" style="min-width: 86px;">Device</label>
+              <select id="cameraSelect"></select>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <button class="btn primary" id="startBtn">Start camera</button>
+              <button class="btn danger" id="stopBtn" disabled>Stop</button>
+              <button class="btn" id="nextBtn" disabled title="Re-arm scanning (Space)">Scan next</button>
+            </div>
+          </div>
+
+          <div class="box">
+            <h2>Copy / cooldown</h2>
+            <label class="inlineToggle">
+              <input type="checkbox" id="copyAsRow" />
+              <span>Copy as spreadsheet row (timestamp · semantic · type · value)</span>
+            </label>
+            <div class="row" style="margin-top:10px;">
+              <label for="cooldownMs" style="min-width: 130px;">Cooldown (ms)</label>
+              <input id="cooldownMs" type="text" value="1500" inputmode="numeric" />
+            </div>
+            <div class="footerNote" style="margin-top:10px;">
+              Tip: After a scan, move the label away (or hit <b>Scan next</b>) so it doesn’t re-scan.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="card">
+      <div class="header">
+        <div class="title">
+          <h1>Last scan</h1>
+          <p>Value below is what we attempted to copy.</p>
+        </div>
+      </div>
+      <div class="side">
+        <div class="box">
+          <h2>Copied value</h2>
+          <div id="lastCode" class="bigCode" style="opacity:.65;">—</div>
+          <div class="meta">
+            <span id="lastMeta">Waiting for a scan…</span>
+            <span id="copyResult"> </span>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn" id="copyAgainBtn" disabled>Copy again</button>
+            <button class="btn" id="clearLogBtn">Clear log</button>
+          </div>
+        </div>
+
+        <div class="box">
+          <h2>Recent scans</h2>
+          <div id="log" class="log"></div>
+          <div class="footerNote" style="margin-top:10px;">
+            If clipboard permissions block auto-copy, you’ll still see the decoded value here and can copy manually.
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="modalBackdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <div class="modalHeader">
+        <div>
+          <h3 id="modalTitle">Multiple barcodes detected</h3>
+          <p>Pick the one you want, then click <b>Copy selected</b>. (Camera is frozen in the background.)</p>
+        </div>
+        <div class="kbdHint"><kbd>Esc</kbd> to cancel</div>
+      </div>
+      <div class="modalBody" id="modalBody"></div>
+      <div class="modalFooter">
+        <div class="modalFooterLeft">
+          <label class="inlineToggle">
+            <input type="checkbox" id="copyAsRowModal" />
+            <span>Copy as row</span>
+          </label>
+          <span class="footerNote">Tip: semantic label is the primary label.</span>
+        </div>
+        <div class="modalFooterRight">
+          <button class="btn" id="cancelModalBtn">Cancel</button>
+          <button class="btn primary" id="copySelectedBtn" disabled>Copy selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function loadScript(src){
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('Failed to load ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureZXing(){
+      if (window.ZXingBrowser) return true;
+      const candidates = [
+        'https://unpkg.com/@zxing/browser@0.1.5',
+        'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5',
+        'https://unpkg.com/@zxing/browser@latest',
+        'https://cdn.jsdelivr.net/npm/@zxing/browser@latest'
+      ];
+      for (const url of candidates){
+        try{
+          await loadScript(url);
+          if (window.ZXingBrowser) return true;
+        }catch(e){ }
+      }
+      return false;
+    }
+
+    const el = (id) => document.getElementById(id);
+
+    const video = el('video');
+    const freezeCanvas = el('freezeCanvas');
+    const cameraSelect = el('cameraSelect');
+    const startBtn = el('startBtn');
+    const stopBtn = el('stopBtn');
+    const nextBtn = el('nextBtn');
+
+    const statusPill = el('statusPill');
+    const statusText = el('statusText');
+    const engineText = el('engineText');
+
+    const lastCode = el('lastCode');
+    const lastMeta = el('lastMeta');
+    const copyResult = el('copyResult');
+    const copyAgainBtn = el('copyAgainBtn');
+    const clearLogBtn = el('clearLogBtn');
+
+    const logEl = el('log');
+    const cooldownMsEl = el('cooldownMs');
+    const copyAsRow = el('copyAsRow');
+
+    const scanStateLabel = el('scanStateLabel');
+
+    const modalBackdrop = el('modalBackdrop');
+    const modalBody = el('modalBody');
+    const cancelModalBtn = el('cancelModalBtn');
+    const copySelectedBtn = el('copySelectedBtn');
+    const copyAsRowModal = el('copyAsRowModal');
+
+    const TAB = String.fromCharCode(9);
+
+    let zxingReader = null;
+    let zxingControls = null;
+
+    let scanningLocked = false;
+    let cooldownEndAt = 0;
+
+    let lastScan = null;
+    let lastCopiedValue = '';
+
+    let modalOpen = false;
+    let modalChoices = [];
+    let selectedChoiceKey = '';
+
+    let audioCtx = null;
+
+    const burst = {
+      active: false,
+      items: new Map(),
+      timer: null,
+      startedAt: 0
+    };
+
+    function setStatus(kind, text){
+      statusPill.classList.remove('good','warn','bad');
+      statusPill.classList.add(kind);
+      statusText.textContent = text;
+    }
+
+    function nowStamp(){
+      return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function setRing(color, progress){
+      document.documentElement.style.setProperty('--ringColor', color);
+      document.documentElement.style.setProperty('--ringProgress', String(progress));
+    }
+
+    function setScanLabel(text){
+      scanStateLabel.textContent = text;
+    }
+
+    function parseCooldown(){
+      const n = Number(String(cooldownMsEl.value).trim());
+      if (!Number.isFinite(n) || n < 0) return 1500;
+      return Math.min(Math.max(n, 0), 20000);
+    }
+
+    function beep(freq, ms){
+      try{
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = freq;
+        g.gain.value = 0.0001;
+        o.connect(g);
+        g.connect(audioCtx.destination);
+
+        const t0 = audioCtx.currentTime;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.linearRampToValueAtTime(0.08, t0 + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + (ms / 1000));
+
+        o.start();
+        o.stop(t0 + (ms / 1000) + 0.02);
+      }catch(e){ }
+    }
+
+    function beepDetect(){ beep(880, 55); }
+    function beepCopied(){ beep(1320, 70); setTimeout(() => beep(1760, 55), 90); }
+
+    function freezeFrame(){
+      try{
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (!w || !h) return;
+        freezeCanvas.width = w;
+        freezeCanvas.height = h;
+        const ctx = freezeCanvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+        freezeCanvas.style.display = 'block';
+      }catch(e){ }
+    }
+
+    function unfreezeFrame(){
+      freezeCanvas.style.display = 'none';
+    }
+
+    function getTechnicalFormat(result){
+      try{
+        if (result && result.getBarcodeFormat){
+          const f = result.getBarcodeFormat();
+          if (typeof f === 'string') return f;
+          if (f && f.toString) return f.toString();
+          return String(f);
+        }
+      }catch(e){ }
+      return 'UNKNOWN';
+    }
+
+    function isDigits(s){
+      if (!s) return false;
+      for (let i=0;i<s.length;i++){
+        const c = s.charCodeAt(i);
+        if (c < 48 || c > 57) return false;
+      }
+      return true;
+    }
+
+    function gs1Mod10Valid(num){
+      if (!num || num.length < 2 || !isDigits(num)) return false;
+      let sum = 0;
+      let pos = 1;
+      for (let i = num.length - 2; i >= 0; i--, pos++){
+        const d = num.charCodeAt(i) - 48;
+        sum += d * (pos % 2 === 1 ? 3 : 1);
+      }
+      const check = (10 - (sum % 10)) % 10;
+      return check === (num.charCodeAt(num.length - 1) - 48);
+    }
+
+    function extractGS1(digits){
+      // Returns { semantic, value } or null
+      if (!digits || digits.length < 16) return null;
+
+      // AI 00 (SSCC) -> 18 digits after "00" in digit stream
+      if (digits.length >= 20){
+        for (let i = 0; i <= digits.length - 20; i++){
+          if (digits[i] === '0' && digits[i+1] === '0'){
+            const cand = digits.slice(i + 2, i + 20);
+            if (cand.length === 18){
+              const score = gs1Mod10Valid(cand) ? 1 : 0;
+              return { semantic: 'SSCC (00)', value: cand, score: 100 + score };
+            }
+          }
+        }
+      }
+
+      // AI 01 (GTIN) -> 14 digits after "01"
+      if (digits.length >= 16){
+        for (let i = 0; i <= digits.length - 16; i++){
+          if (digits[i] === '0' && digits[i+1] === '1'){
+            const cand = digits.slice(i + 2, i + 16);
+            if (cand.length === 14){
+              return { semantic: 'GTIN (01)', value: cand, score: 90 };
+            }
+          }
+        }
+      }
+
+      return null;
+    }
+
+    function inferSemanticAndValue(rawText, technical){
+      const raw = String(rawText ?? '').trim();
+      const upper = raw.toUpperCase();
+
+      // URLs
+      if (upper.startsWith('HTTP://') || upper.startsWith('HTTPS://')){
+        return { semantic: 'URL', value: raw };
+      }
+
+      const digitsOnly = upper.replace(/[^0-9]/g, '');
+      const gs1 = extractGS1(digitsOnly);
+      if (gs1) return { semantic: gs1.semantic, value: gs1.value };
+
+      // UPU S10: AA123456789NZ
+      if (upper.length >= 13){
+        for (let i=0; i<= upper.length - 13; i++){
+          const sub = upper.slice(i, i+13);
+          const a0 = sub.charCodeAt(0), a1 = sub.charCodeAt(1);
+          const z11 = sub.charCodeAt(11), z12 = sub.charCodeAt(12);
+          const lettersOk = (a0>=65&&a0<=90) && (a1>=65&&a1<=90) && (z11>=65&&z11<=90) && (z12>=65&&z12<=90);
+          if (lettersOk){
+            const mid = sub.slice(2, 11);
+            if (mid.length === 9 && isDigits(mid)) return { semantic: 'Postal tracking (S10)', value: sub };
+          }
+        }
+      }
+
+      // NZ Post courier example: 16 digits + 3 letters + 3 digits + 2 letters
+      if (upper.length >= 24){
+        for (let i=0; i<= upper.length - 24; i++){
+          const sub = upper.slice(i, i+24);
+          const a = sub.slice(0,16);
+          const b = sub.slice(16,19);
+          const c = sub.slice(19,22);
+          const d = sub.slice(22,24);
+          const bLetters = (b.charCodeAt(0)>=65&&b.charCodeAt(0)<=90) && (b.charCodeAt(1)>=65&&b.charCodeAt(1)<=90) && (b.charCodeAt(2)>=65&&b.charCodeAt(2)<=90);
+          const dLetters = (d.charCodeAt(0)>=65&&d.charCodeAt(0)<=90) && (d.charCodeAt(1)>=65&&d.charCodeAt(1)<=90);
+          if (isDigits(a) && bLetters && isDigits(c) && dLetters){
+            return { semantic: 'Courier tracking', value: sub };
+          }
+        }
+      }
+
+      // If this looks like a retail code based on technical format
+      const tech = String(technical || 'UNKNOWN').toUpperCase();
+      if (tech.includes('EAN') || tech.includes('UPC')){
+        // Keep digits, but do not delete leading zeros; spreadsheet people may need exact string.
+        return { semantic: 'GTIN / EAN-UPC', value: digitsOnly || raw };
+      }
+
+      // Data Matrix / QR content that is not GS1: keep as-is but trimmed
+      if (tech.includes('QR') || tech.includes('DATA_MATRIX')){
+        return { semantic: tech.includes('DATA_MATRIX') ? 'Data Matrix content' : 'QR content', value: raw };
+      }
+
+      // Default: treat as SKU / Item code
+      return { semantic: 'SKU / Item code', value: raw };
+    }
+
+    function scoreSemantic(semantic){
+      const s = (semantic || '').toUpperCase();
+      if (s.includes('SSCC')) return 100;
+      if (s.includes('GTIN')) return 90;
+      if (s.includes('POSTAL') || s.includes('COURIER')) return 85;
+      if (s.includes('SERIAL')) return 80;
+      if (s.includes('SKU')) return 70;
+      if (s.includes('QR') || s.includes('DATA MATRIX')) return 60;
+      if (s.includes('URL')) return 50;
+      return 10;
+    }
+
+    async function tryClipboardCopy(text){
+      try{
+        await navigator.clipboard.writeText(text);
+        return { ok:true, method:'clipboard.writeText' };
+      }catch(e){
+        try{
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.top = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          if (ok) return { ok:true, method:'execCommand(copy)' };
+        }catch(e2){ }
+        return { ok:false, method:'blocked' };
+      }
+    }
+
+    function selectLastCode(){
+      const range = document.createRange();
+      range.selectNodeContents(lastCode);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function renderLogItem(item){
+      const row = document.createElement('div');
+      row.className = 'logItem';
+
+      const left = document.createElement('div');
+      left.className = 'left';
+
+      const topLine = document.createElement('div');
+      topLine.className = 'topLine';
+
+      const tag1 = document.createElement('span');
+      tag1.className = 'tag';
+      tag1.textContent = item.semantic;
+
+      const tag2 = document.createElement('span');
+      tag2.className = 'tag';
+      tag2.style.opacity = '.85';
+      tag2.textContent = item.technical;
+
+      const code = document.createElement('code');
+      code.textContent = item.value;
+
+      topLine.appendChild(tag1);
+      topLine.appendChild(tag2);
+      topLine.appendChild(code);
+
+      const t = document.createElement('div');
+      t.className = 't';
+      t.textContent = item.time;
+
+      left.appendChild(topLine);
+      left.appendChild(t);
+
+      const btn = document.createElement('button');
+      btn.className = 'miniBtn';
+      btn.textContent = 'Copy';
+      btn.addEventListener('click', async () => {
+        const payload = buildCopyPayload(item, copyAsRow.checked);
+        const res = await tryClipboardCopy(payload);
+        copyResult.textContent = res.ok ? 'Copied (' + res.method + ')' : 'Copy blocked — select & Ctrl+C';
+        if (!res.ok) selectLastCode();
+      });
+
+      row.appendChild(left);
+      row.appendChild(btn);
+      return row;
+    }
+
+    function pushLog(item){
+      const node = renderLogItem(item);
+      logEl.prepend(node);
+      while (logEl.children.length > 12) logEl.removeChild(logEl.lastChild);
+    }
+
+    function buildCopyPayload(item, asRow){
+      if (!asRow) return item.value;
+      return item.time + TAB + item.semantic + TAB + item.technical + TAB + item.value;
+    }
+
+    function lockCooldown(ms){
+      scanningLocked = true;
+      cooldownEndAt = Date.now() + ms;
+      nextBtn.disabled = false;
+      setStatus('good', 'Copied — cooldown');
+      setScanLabel('Cooldown');
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--cool') || '#ff9c2a', 1);
+      animateCooldown();
+    }
+
+    function unlockScanning(){
+      scanningLocked = false;
+      cooldownEndAt = 0;
+      nextBtn.disabled = true;
+      setStatus('good', 'Scanning');
+      setScanLabel('Ready');
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--ready') || '#7aa3ff', 1);
+      copyResult.textContent = '';
+    }
+
+    function animateCooldown(){
+      const total = parseCooldown();
+      const tick = () => {
+        if (!scanningLocked || !cooldownEndAt) return;
+        const remaining = Math.max(0, cooldownEndAt - Date.now());
+        const p = total > 0 ? (remaining / total) : 0;
+
+        // color-coded: green flash at start, then orange, then ready blue
+        if (remaining > 0){
+          setRing(getComputedStyle(document.documentElement).getPropertyValue('--cool') || '#ff9c2a', p);
+          requestAnimationFrame(tick);
+        } else {
+          unlockScanning();
+        }
+      };
+      requestAnimationFrame(tick);
+    }
+
+    function clearBurst(){
+      burst.active = false;
+      burst.items.clear();
+      burst.startedAt = 0;
+      if (burst.timer) window.clearTimeout(burst.timer);
+      burst.timer = null;
+    }
+
+    function candidateFromResult(result){
+      const rawText = result.getText ? result.getText() : '';
+      const technical = getTechnicalFormat(result);
+      const info = inferSemanticAndValue(rawText, technical);
+      const key = (technical + '|' + info.semantic + '|' + info.value).toUpperCase();
+      const rawPreview = String(rawText || '').trim();
+      const rawShort = rawPreview.length > 120 ? (rawPreview.slice(0, 120) + '…') : rawPreview;
+      return {
+        key,
+        time: nowStamp(),
+        semantic: info.semantic,
+        technical,
+        value: String(info.value || '').trim(),
+        rawShort
+      };
+    }
+
+    function startBurstIfNeeded(){
+      if (burst.active) return;
+      burst.active = true;
+      burst.startedAt = Date.now();
+      setStatus('warn', 'Detected…');
+      setScanLabel('Detected');
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--warn') || '#ffcc66', 1);
+      beepDetect();
+      burst.timer = window.setTimeout(finalizeBurst, 380);
+    }
+
+    async function finalizeBurst(){
+      if (modalOpen) return;
+
+      const items = Array.from(burst.items.values()).filter(x => x.value);
+      clearBurst();
+
+      if (!items.length) return;
+
+      if (items.length === 1){
+        await copyAndCommit(items[0], copyAsRow.checked);
+        return;
+      }
+
+      // Multiple: freeze and open modal
+      items.sort((a,b) => (scoreSemantic(b.semantic) - scoreSemantic(a.semantic)) || (b.value.length - a.value.length));
+      openModal(items);
+    }
+
+    async function copyAndCommit(item, asRow){
+      if (!item || !item.value) return;
+
+      lastScan = item;
+      lastCopiedValue = item.value;
+
+      lastCode.textContent = item.value;
+      lastCode.style.opacity = '1';
+      lastMeta.textContent = item.time + ' · ' + item.semantic + ' · ' + item.technical;
+
+      const payload = buildCopyPayload(item, asRow);
+
+      // Visual feedback (green) before attempting clipboard
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--good') || '#2bd576', 1);
+      setScanLabel('Copied');
+
+      const res = await tryClipboardCopy(payload);
+      copyAgainBtn.disabled = false;
+
+      if (res.ok){
+        copyResult.textContent = 'Copied ✓ (' + res.method + ')';
+        beepCopied();
+      } else {
+        copyResult.textContent = 'Auto-copy blocked — select & Ctrl+C';
+        selectLastCode();
+      }
+
+      pushLog(item);
+
+      const cd = parseCooldown();
+      if (cd > 0){
+        lockCooldown(cd);
+      } else {
+        unlockScanning();
+      }
+    }
+
+    function openModal(items){
+      modalOpen = true;
+      modalChoices = items;
+      selectedChoiceKey = '';
+
+      // Keep modal copy toggle in sync with main toggle
+      copyAsRowModal.checked = copyAsRow.checked;
+
+      freezeFrame();
+
+      modalBody.innerHTML = '';
+      items.forEach((item, idx) => {
+        const choice = document.createElement('label');
+        choice.className = 'choice';
+
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'barcodeChoice';
+        radio.value = item.key;
+        radio.style.marginTop = '4px';
+
+        // Preselect best-scored
+        if (idx === 0){
+          radio.checked = true;
+          selectedChoiceKey = item.key;
+          copySelectedBtn.disabled = false;
+        }
+
+        radio.addEventListener('change', () => {
+          selectedChoiceKey = radio.value;
+          copySelectedBtn.disabled = !selectedChoiceKey;
+        });
+
+        const main = document.createElement('div');
+        main.className = 'choiceMain';
+
+        const top = document.createElement('div');
+        top.className = 'choiceTop';
+
+        const tag1 = document.createElement('span');
+        tag1.className = 'tag';
+        tag1.textContent = item.semantic;
+
+        const tag2 = document.createElement('span');
+        tag2.className = 'tag';
+        tag2.style.opacity = '.85';
+        tag2.textContent = item.technical;
+
+        const value = document.createElement('div');
+        value.className = 'choiceValue';
+        value.textContent = item.value;
+
+        top.appendChild(tag1);
+        top.appendChild(tag2);
+        top.appendChild(value);
+
+        const raw = document.createElement('div');
+        raw.className = 'choiceRaw';
+        raw.textContent = item.rawShort ? ('Raw: ' + item.rawShort) : '';
+
+        main.appendChild(top);
+        if (item.rawShort && item.rawShort !== item.value) main.appendChild(raw);
+
+        choice.appendChild(radio);
+        choice.appendChild(main);
+
+        modalBody.appendChild(choice);
+      });
+
+      modalBackdrop.classList.add('show');
+      setStatus('warn', 'Choose a barcode');
+      setScanLabel('Choose');
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--warn') || '#ffcc66', 1);
+    }
+
+    function closeModal(){
+      modalOpen = false;
+      modalChoices = [];
+      selectedChoiceKey = '';
+      modalBody.innerHTML = '';
+      modalBackdrop.classList.remove('show');
+      unfreezeFrame();
+
+      if (!scanningLocked) unlockScanning();
+    }
+
+    cancelModalBtn.addEventListener('click', () => {
+      closeModal();
+    });
+
+    copySelectedBtn.addEventListener('click', async () => {
+      const picked = modalChoices.find(x => x.key === selectedChoiceKey) || modalChoices[0];
+      const asRow = copyAsRowModal.checked;
+      // sync back to main toggle
+      copyAsRow.checked = asRow;
+      closeModal();
+      await copyAndCommit(picked, asRow);
+    });
+
+    // Keep toggles in sync
+    copyAsRow.addEventListener('change', () => {
+      if (modalOpen) copyAsRowModal.checked = copyAsRow.checked;
+    });
+
+    copyAsRowModal.addEventListener('change', () => {
+      copyAsRow.checked = copyAsRowModal.checked;
+    });
+
+    // Keyboard: Space to re-arm, Esc to cancel modal
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && modalOpen){
+        e.preventDefault();
+        closeModal();
+        return;
+      }
+      if (e.code === 'Space'){
+        if (!nextBtn.disabled){
+          e.preventDefault();
+          unlockScanning();
+        }
+      }
+    });
+
+    async function listCameras(){
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      cameraSelect.innerHTML = '';
+      cams.forEach((d, idx) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || ('Camera ' + (idx + 1));
+        cameraSelect.appendChild(opt);
+      });
+
+      if (!cams.length){
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No camera devices found';
+        cameraSelect.appendChild(opt);
+      }
+    }
+
+    async function start(){
+      setStatus('warn', 'Starting…');
+      setScanLabel('Starting');
+      setRing(getComputedStyle(document.documentElement).getPropertyValue('--warn') || '#ffcc66', 1);
+      engineText.textContent = '';
+
+      const okZXing = await ensureZXing();
+      if (!okZXing){
+        setStatus('bad', 'Failed to load scanner library');
+        engineText.textContent = 'ZXing failed to load (CDN blocked/offline).';
+        alert('Could not load the ZXing library from CDN. If you are offline or your network blocks CDNs, the scanner cannot run.');
+        return;
+      }
+
+      try{
+        await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }catch(e){
+        setStatus('bad', 'Camera blocked');
+        engineText.textContent = 'Camera permission denied.';
+        alert('Camera access is blocked. Please allow camera permissions and try again.');
+        return;
+      }
+
+      await listCameras();
+
+      zxingReader = new ZXingBrowser.BrowserMultiFormatReader();
+
+      const chosenId = cameraSelect.value || undefined;
+      const constraints = chosenId
+        ? { video: { deviceId: { exact: chosenId } } }
+        : { video: { facingMode: 'environment' } };
+
+      try{
+        zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err, controls) => {
+          if (!result) return;
+          if (modalOpen) return;
+          if (scanningLocked) return;
+
+          startBurstIfNeeded();
+
+          const cand = candidateFromResult(result);
+          if (!cand.value) return;
+          burst.items.set(cand.key, cand);
+        });
+      }catch(e){
+        setStatus('bad', 'Could not start camera');
+        engineText.textContent = 'Start error.';
+        alert('Could not start scanning. Try selecting a different camera.');
+        return;
+      }
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      nextBtn.disabled = true;
+
+      unlockScanning();
+      engineText.textContent = 'Engine: ZXing (@zxing/browser)';
+    }
+
+    function stop(){
+      try{ zxingControls && zxingControls.stop && zxingControls.stop(); }catch(e){ }
+      zxingControls = null;
+
+      try{
+        const stream = video.srcObject;
+        if (stream && stream.getTracks) stream.getTracks().forEach(t => t.stop());
+      }catch(e){ }
+
+      video.srcObject = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      nextBtn.disabled = true;
+
+      clearBurst();
+      scanningLocked = false;
+      cooldownEndAt = 0;
+
+      closeModal();
+
+      setStatus('warn', 'Not running');
+      setScanLabel('Not running');
+      setRing('rgba(255,255,255,.35)', 1);
+      engineText.textContent = '';
+    }
+
+    startBtn.addEventListener('click', start);
+    stopBtn.addEventListener('click', stop);
+
+    nextBtn.addEventListener('click', () => {
+      unlockScanning();
+    });
+
+    copyAgainBtn.addEventListener('click', async () => {
+      if (!lastScan) return;
+      const payload = buildCopyPayload(lastScan, copyAsRow.checked);
+      const res = await tryClipboardCopy(payload);
+      copyResult.textContent = res.ok ? ('Copied ✓ (' + res.method + ')') : 'Copy blocked — select & Ctrl+C';
+      if (!res.ok) selectLastCode();
+    });
+
+    clearLogBtn.addEventListener('click', () => {
+      logEl.innerHTML = '';
+    });
+
+    cameraSelect.addEventListener('change', async () => {
+      if (zxingControls){
+        stop();
+        await start();
+      }
+    });
+
+    window.addEventListener('beforeunload', stop);
+
+    (async () => {
+      setStatus('warn', 'Not running');
+      setScanLabel('Not running');
+      setRing('rgba(255,255,255,.35)', 1);
+      try{
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) await listCameras();
+      }catch(e){ }
+    })();
+  </script>
+</body>
+</html>
